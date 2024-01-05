@@ -1,0 +1,379 @@
+---
+title: ""
+output: html_document
+date: ""
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(tidyverse)
+library(magrittr)
+library(flextable)
+library(officer)
+library(ggseg)
+library(patchwork)
+library(svglite)
+library(gridExtra)
+library(ggpubr)
+library(cowplot)
+```
+
+```{r make_funcs, include=FALSE}
+
+#Make a palette for our figures
+viridis_colors = list(
+  viridis_contrast = c("#Bbab1f", "#31688EFF", "#35B779FF", "#440154FF","#333333")
+)
+
+#This makes a function that runs the correlation.  You pass in the two df and a list of brain regions.
+runcor<-function(xdata,ydata,regions){
+  rows<-length(regions)
+  out.df<-as.data.frame(matrix(nrow=rows,ncol=6))
+  colnames(out.df)<-c("brain_region","t","r","pval","CIlow","CIhigh")
+  brain.reg<-paste(regions,sep=",")
+  
+  for (i in 1:length(brain.reg)){
+    var=i+1
+    save<-cor.test(xdata[[var]],ydata[[var]])
+    out.df[i,"t"]<-save$statistic
+    out.df[i,"r"]<-save$estimate
+    out.df[i,"pval"]<-save$p.value
+    out.df[i,"CIlow"]<-save$conf.int[1]
+    out.df[i,"CIhigh"]<-save$conf.int[2]
+  }
+  out.df$brain_region<-brain.reg
+  return(out.df)
+}  
+
+#This is a custom function that plots the results from the previous function using ggseg
+ggsegplot<-function(dfin,colname,ref,title,slice=NULL,bgcol="black",min=-1,max=1,leg="r"){
+    atlassel=ref$atlas[1]
+   df<-merge(dfin,ref,by.x="brain_region",by.y="find")%>% 
+    select ("atlas","type","hemi","side","replacewith","label",colname)%>%
+    rename("region"="replacewith","dim"=colname)
+
+  plot.out<-ggseg(df, atlas=atlassel,
+               mapping=aes(fill=as.numeric(dim)),
+               color="black",size=0.5,view=slice,position="dispersed")+
+    scale_fill_gradient2(name=leg,high="#ff5550",low="blue", mid="white",na.value="grey70",limits = c(min,max))+
+    xlab("")+ylab("")+theme(axis.text.x=element_blank())+
+    theme_void()+theme(legend.position="bottom")+
+    ggtitle(title)+theme(plot.title=element_text(color=bgcol,face="bold"),
+                         text=element_text(size=10,vjust=0.5),
+                         plot.margin=unit(c(-0.1,0,-0.1,0),units="cm"))
+  return(plot.out)
+  
+}  
+
+#This is a custom function for our scatterplots
+scatter<-function(dfin,xvar,yvar,title,xlab,ylab,shade="black"){
+plot.out<-ggplot(dfin,aes(x=xvar,y=yvar)) +
+    xlab(xlab) + ylab(ylab) + ggtitle(title) +
+    theme(legend.title=element_blank())+
+    geom_jitter(shape=21,size=2,position=position_jitter(0.1),alpha=0.3,color=viridis_colors$viridis_contrast[5],fill=shade)+
+    geom_smooth(method=lm, se=TRUE,color=viridis_colors$viridis_contrast[5],fill=shade) +
+    theme_bw()+
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+ 
+    theme(legend.position="none")+
+    theme(text=element_text(size=10)) + theme(plot.title = element_text(hjust = 0.5)) 
+}
+
+#This generates a nicely-arranged grid of ggplots
+makegggrid<-function(text="testtitle",plota,plotb,plotc,plotd){
+  plot_grid(text_grob(text,face="bold",just="left",x=0,y=0.1,size=11),
+            plota,plotb,plotc,plotd+theme(legend.position = "none"),
+            NULL,
+            get_legend(plotd+theme(text=element_text(vjust=0.75,size=8),
+                                                       plot.margin=unit(c(0.3,0.1,0.3,0.1),"cm"))),
+            nrow=7,rel_heights=c(0.5,1,1,1,1,0.1,0.5),rel_widths=c(1,1,1,1,1,1),greedy=FALSE)
+}
+
+#Custom function to identify outliers
+outlier.sd <- function(x) {
+  return(x < mean(x)-(3*sd(x)) | x > mean(x)+(3*sd(x)))
+}
+
+#Custom function to make boxplots that compare individual freesurfer values 
+#before and after super-resolution processing to 3T measures
+make_boxes<-function(df,x,y,ylab=y){
+  df %>%
+    group_by(get(x)) %>%
+    mutate(outlier = ifelse(outlier.sd(get(y)), SubjID, NA)) %>%
+    ggplot(aes(x=get(x),y=get(y))) +
+    geom_point()+
+    geom_line(aes(group=SubjID),linewidth=0.1,alpha=0.2)+
+    # geom_label_repel(aes(label=outlier,x=get(x)),na.rm=T)+
+    geom_boxplot(alpha=0.4, width=0.5,aes(fill=get(x)))+
+    theme_light()+
+    ylab(ylab)+
+    theme(axis.title.x=element_blank(),
+          panel.grid = element_blank(),
+          legend.position = 'none',
+          text=element_text(size=10))
+}
+
+#Custom function that generates lots of ggseg plots.
+#This saves them to the global environment which is against coding best practice.
+#It also will only work in the context of this script because it refers to objects
+#that are loaded before its use.  Send all code-scolding to Rebecca Hayes at Boston Children's.
+assign.plots<-function(refs=list(SA_dk_ref,CT_dk_ref,CV_dk_ref,sub_dk_ref),
+                       plotnames=c("SAPLOT","CTPLOT","CVPLOT","SUBPLOT"),
+                       targetvar,prefix,leg=c(0,0,0,1),
+                       is.steigers=0){
+  plots=list()
+  for(i in 1:length(refs)){
+    ref=refs[[i]]
+    if(is.steigers==0){
+      p<-ggsegplot(dfin=filter(regional_all_merged,brain_region %in% ref$find),
+                    colname=targetvar,ref=ref,title="")}
+    else{
+      p<-ggsegplot(dfin=filter(regional_all_merged,brain_region %in% ref$find),
+                    colname=targetvar,ref=ref,title="",
+                   min=min(regional_all_merged[[targetvar]]),
+                           max=max(regional_all_merged[[targetvar]]),leg="Z")
+    }
+    
+    if(leg[[i]]==0){
+      p=p+theme(legend.position="none")
+    }
+    assign(paste0(prefix,plotnames[[i]]),p,envir = .GlobalEnv)
+  }
+  
+}
+
+```
+
+```{r read_in, include=FALSE}
+#Load in data saved in 01_prepare_data.R
+load("global_all_merged.Rdat")
+global_all_merged<-all_merged
+load("regional_all_merged.Rdat")
+regional_all_merged<-all_merged
+
+remove(all_merged)
+
+load("regional_data.Rdata")
+load("global_data.Rdata")
+
+#Load in ggseg reference files
+SA_dk_ref<-read_delim(file='ref/SA_ggseg_ref_desikan.txt',delim="\t") 
+CT_dk_ref<-read_delim(file='ref/CT_ggseg_ref_desikan.txt',delim="\t")
+CV_dk_ref<-read_delim(file='ref/vol_ggseg_ref_desikan.txt',delim="\t") 
+sub_dk_ref<-read_delim(file='ref/sub_ggseg_ref_aseg_new.txt',delim="\t") 
+
+
+```
+
+```{r Fig2,include=FALSE}
+
+#Make a figure showing global measurement correlations between 3T and single-pair axial low-field scans
+
+#Make tibble with data of interest
+all<-inner_join(global.3Trun01,global.rawLF,by="SubjID",suffix=c(".3T",".axi"))
+
+#Make side-by-side scatter plots for surface area, thickness, volume, and subcortical gray volume
+SA_scatter<-scatter(dfin=all, xvar=all$Total_pial_area.3T,yvar=all$Total_pial_area.axi,
+                    title="Total Cortical\nSurface Area (mm²)",
+                    xlab="3T MRI",
+                    ylab="64mT MRI",
+                    shade=viridis_colors$viridis_contrast[1])+ 
+  scale_y_continuous(labels = function(x) format(x, scientific = TRUE))+ 
+  scale_x_continuous(labels = function(x) format(x, scientific = TRUE))
+
+CT_scatter<-scatter(dfin=all,xvar=all$Mean_thick.3T,yvar=all$Mean_thick.axi,
+                    title="Mean Cortical Thickness\n(mm)",
+                    xlab="3T MRI",
+                    ylab="64mT MRI",
+                    shade=viridis_colors$viridis_contrast[2])
+ICV_scatter<-scatter(dfin=all,xvar=all$EstimatedTotalIntraCranialVol.3T,yvar=all$EstimatedTotalIntraCranialVol.axi,
+                     title="Total Intracranial\nVolume (mm³)",
+                     xlab="3T MRI",
+                     ylab="64mT MRI",
+                    shade=viridis_colors$viridis_contrast[3])+ 
+  scale_y_continuous(labels = function(x) format(x, scientific = TRUE))+ 
+  scale_x_continuous(labels = function(x) format(x, scientific = TRUE))
+
+SCG_scatter<-scatter(dfin=all,xvar=all$SubCortGrayVol.3T,yvar=all$SubCortGrayVol.axi,
+                     title="Subcortical Gray\nMatter Volume (mm³)",
+                     xlab="3T MRI",
+                     ylab="64mT MRI",
+                    shade=viridis_colors$viridis_contrast[4])+ 
+  scale_y_continuous(labels = function(x) format(x, scientific = TRUE))+ 
+  scale_x_continuous(labels = function(x) format(x, scientific = TRUE))
+
+scatters<-SA_scatter+ labs(tag = 'A') | CT_scatter | ICV_scatter | SCG_scatter 
+
+# Make column of ggsegs showing regional correlations between 3T and single-pair LF scans
+axiSAPLOT<-ggsegplot(filter(regional_all_merged,str_detect(brain_region,"_areapial")),"raw3T_r",SA_dk_ref,"Cortical Surface Area",bgcol="#Bbab1f") + labs(tag = 'B')
+axiCTPLOT<-ggsegplot(filter(regional_all_merged,str_detect(brain_region,"_thickness")),"raw3T_r",CT_dk_ref,"Cortical Thickness",bgcol=viridis_colors$viridis_contrast[2])
+axiCVPLOT<-ggsegplot(filter(regional_all_merged,str_detect(brain_region,"_volume")),"raw3T_r",CV_dk_ref,"Cortical Volume",bgcol=viridis_colors$viridis_contrast[3])
+axiSUBPLOT<-ggsegplot(filter(regional_all_merged,brain_region %in% sub_dk_ref$find), "raw3T_r",sub_dk_ref,"Subcortical Volume",bgcol=viridis_colors$viridis_contrast[4])
+
+ggsegs<-axiSAPLOT+axiCTPLOT+axiCVPLOT+axiSUBPLOT+guide_area()+plot_layout(nrow=5,heights=c(2,2,2,2,1),guides="collect")
+
+#Format regional data for use in boxplots
+regional_all_merged<-mutate(regional_all_merged,
+                            measure=case_when(
+                              brain_region %in% SA_dk_ref$find ~ "Cortical Surface Area",
+                              brain_region %in% CT_dk_ref$find ~ "Cortical Thickness",
+                              brain_region %in% CV_dk_ref$find ~ "Cortical Volume",
+                              brain_region %in% sub_dk_ref$find ~ "Subcortical Volume"),
+                            measure=factor(measure,
+                                           levels = c("Cortical Surface Area", 
+                                                      "Cortical Volume",
+                                                      "Cortical Thickness", 
+                                                      "Subcortical Volume"))) %>%
+  filter(!is.na(measure))
+
+text<-aggregate(raw3T_r~measure,regional_all_merged, max)
+
+#Make boxplot of pearson's R values for regional correlations between 3T and low-field single-pair
+boxes<-ggplot(regional_all_merged,aes(x=measure,y=raw3T_r,fill=measure)) +
+    xlab("Regional Measurement") + ylab("64mT Correlation with 3T") +
+    theme(legend.title=element_blank())+
+    geom_boxplot(color=viridis_colors$viridis_contrast[5],alpha=0.9)+
+    theme_bw()+ 
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+ 
+    ylim(NA,1) +
+    scale_fill_manual(values=c("Cortical Surface Area"=viridis_colors$viridis_contrast[1],
+                               "Cortical Volume"=viridis_colors$viridis_contrast[3], 
+                               "Cortical Thickness"=viridis_colors$viridis_contrast[2], 
+                               "Subcortical Volume"=viridis_colors$viridis_contrast[4]))+
+    theme(axis.ticks.x = element_blank(), axis.text.x=element_blank()) +
+  geom_text(data=text,mapping=aes(label=measure,y=raw3T_r),size=3,vjust="outward",nudge_y=0.02) +
+  theme(legend.position="none",text=element_text(size=10)) + labs(tag = 'C')
+
+layout<-"AAAA
+BBCC
+BBCC
+BBCC
+"
+#Combine scatters, ggsegs, and boxplots into one figure and save
+allplots<-wrap_plots(scatters,ggsegs,boxes) + plot_layout(design=layout) #+plot_annotation(tag_level="A")
+ggsave(filename="Fig2_globalregionalrawaxi.pdf",allplots,width=10.5,height=6)
+
+```
+
+```{r Fig3, include=F}
+#set up the data and references we need for this procedure
+refs<-list(SA_dk_ref,CT_dk_ref,CV_dk_ref,sub_dk_ref)
+plotnames<-c("SAPLOT","CTPLOT","CVPLOT","SUBPLOT")
+targetvar<-"raw3T_r"
+prefix<-"rawaxi"
+leg=c(0,0,0,1)
+
+#Make row labels for our ggseg grids
+rowlab1<-text_grob("Cortical\nSurface\nArea",face="bold",just="centre",x=0.5,size=10,lineheight=1,vjust="top",y=0.4)
+rowlab2<-text_grob("Cortical\nThickness",face="bold",just="centre",x=0.5,size=10,lineheight=1,vjust="top",y=0.4)
+rowlab3<-text_grob("Cortical\nVolume",face="bold",just="centre",x=0.5,size=10,lineheight=1,vjust="top",y=0.4)
+rowlab4<-text_grob("Subcortical\nVolume",face="bold",just="centre",x=0.5,size=10,lineheight=1,vjust="top",y=0.4)
+rowlabs<-plot_grid(NULL,rowlab1,rowlab2,rowlab3,rowlab4,NULL,nrow=6,rel_heights = c(0.5,1,1,1,1,0.6))
+
+#Run plot assignment function for Aim 4
+assign.plots(targetvar="aim4steigers_Z",prefix="steigers4",is.steigers=1)
+assign.plots(targetvar="synth3T_r",prefix="synthaxi")
+assign.plots(targetvar="synthall3T_r",prefix="synthall")
+
+#Make ggseg matrices for Aim 4 synth-single pair vs synth-multi scan  with steiger's measurements
+synthaxiggsegs<-makegggrid(text="A. SynthSR-Processed Axial 64mT\n     Correlations with 3T",
+                           synthaxiSAPLOT,synthaxiCTPLOT,synthaxiCVPLOT,synthaxiSUBPLOT)
+synthallggsegs<-makegggrid(text="B. SynthSR-Processed Multi-Acquisition 64mT\n    Correlations with 3T", 
+                         synthallSAPLOT,synthallCTPLOT,synthallCVPLOT,synthallSUBPLOT)
+steigers4ggsegs<-makegggrid(text="C. Steiger's Z Test of SynthSR + Multi-Acquisition\n     Improvement on SynthSR Processing",
+                           steigers4SAPLOT,steigers4CTPLOT,steigers4CVPLOT,steigers4SUBPLOT)
+#Combine ggseg matrices together and save
+aim4ggseg<-plot_grid(rowlabs,synthaxiggsegs,synthallggsegs,rel_widths=c(0.5,2,2),nrow=1)
+aim4ggseg<-plot_grid(aim4ggseg,steigers4ggsegs,nrow=1,rel_widths=c(5,2))
+ggsave("ggseg_synthaxivssynthall.pdf",aim4ggseg,width=10,height=3.5)
+
+
+#Run plot assignment function for Aim 1
+rawaxiplots<-assign.plots(targetvar="raw3T_r",prefix="rawaxi")
+synthaxiplots<-assign.plots(targetvar="synth3T_r",prefix="synthaxi")
+steigers1plots<-assign.plots(targetvar="aim1steigers_Z",prefix="steigers1",is.steigers=1)
+
+#Make ggseg matrices for Aim 1
+rawaxiggsegs<-makegggrid(text="A. Standard Axial 64mT\n    Correlations with 3T", 
+                         rawaxiSAPLOT,rawaxiCTPLOT,rawaxiCVPLOT,rawaxiSUBPLOT)
+synthaxiggsegs<-makegggrid(text="B. SynthSR-Processed Axial 64mT\n     Correlations with 3T",
+                           synthaxiSAPLOT,synthaxiCTPLOT,synthaxiCVPLOT,synthaxiSUBPLOT)
+steigers1ggsegs<-makegggrid(text="C. Steiger's Z Test of SynthSR\n     Improvement on Standard",
+                           steigers1SAPLOT,steigers1CTPLOT,steigers1CVPLOT,steigers1SUBPLOT)
+#Combine ggseg matrices together
+aim1ggseg<-plot_grid(NULL,NULL,NULL,rowlabs,synthaxiggsegs,rel_widths=c(0.5,2,0.3,0.5,2),nrow=1)
+aim1ggseg<-plot_grid(aim1ggseg,steigers1ggsegs,nrow=1,rel_widths=c(5.8,2))
+
+#Run plot assignment function for Aim 2
+rawallplots<-assign.plots(targetvar="rawall3T_r",prefix="rawall")
+steigers2plots<-assign.plots(targetvar="aim2steigers_Z",prefix="steigers2",is.steigers=1)
+
+#Make ggseg matrices for Aim 2
+rawaxiggsegs<-makegggrid(text="A. Standard Axial 64mT\n    Correlations with 3T", 
+                         rawaxiSAPLOT,rawaxiCTPLOT,rawaxiCVPLOT,rawaxiSUBPLOT)
+rawallggsegs<-makegggrid(text="D. Standard Multi-Acquisition 64mT\n     Correlations with 3T",
+                           rawallSAPLOT,rawallCTPLOT,rawallCVPLOT,rawallSUBPLOT)
+steigers2ggsegs<-makegggrid(text="E. Steiger's Z Test of Multi-Acquisition\n     Improvement on Standard",
+                           steigers2SAPLOT,steigers2CTPLOT,steigers2CVPLOT,steigers2SUBPLOT)
+#Combine ggseg matrices together
+aim2ggseg<-plot_grid(rowlabs,rawaxiggsegs,NULL,rowlabs,rawallggsegs,rel_widths=c(0.5,2,0.3,0.5,2),nrow=1)
+aim2ggseg<-plot_grid(aim2ggseg,steigers2ggsegs,nrow=1,rel_widths=c(5.8,2))
+
+#Run plot assignment function for Aim 3
+synthallplots<-assign.plots(targetvar="synthall3T_r",prefix="synthall")
+steigers3plots<-assign.plots(targetvar="aim3steigers_Z",prefix="steigers3",is.steigers=1)
+#Make ggseg matrices for Aim 2
+rawaxiggsegs<-makegggrid(text="A. Standard Axial 64mT\n    Correlations with 3T", 
+                         rawaxiSAPLOT,rawaxiCTPLOT,rawaxiCVPLOT,rawaxiSUBPLOT)
+synthallggsegs<-makegggrid(text="F. SynthSR-Processed Multi-Acquisition\n     64mT Correlations with 3T",
+                           synthallSAPLOT,synthallCTPLOT,synthallCVPLOT,synthallSUBPLOT)
+steigers3ggsegs<-makegggrid(text="G. Steiger's Z Test of SynthSR & Multi-\n     Acquisition Improvement on Standard",
+                           steigers3SAPLOT,steigers3CTPLOT,steigers3CVPLOT,steigers3SUBPLOT)
+#Combine ggseg matrices together
+aim3ggseg<-plot_grid(NULL,NULL,NULL,rowlabs,synthallggsegs,rel_widths=c(0.5,2,0.3,0.5,2),nrow=1)
+aim3ggseg<-plot_grid(aim3ggseg,steigers3ggsegs,nrow=1,rel_widths=c(5.8,2))
+
+#Make master ggseg matrix with all 3 aims represented
+all_ggseg_matrix<-plot_grid(aim1ggseg,aim2ggseg,aim3ggseg,nrow=3)
+
+ggsave("Fig3_all_ggseg_matrix.pdf",all_ggseg_matrix,width=12.5,height=11)
+
+
+```
+```{r fig4, include=FALSE}
+
+#Make boxplots for global variables that trace individual measurements pre-super resolution processing,
+#Post-super resolution processing, and in 3Tscans
+varlabs=c(NA,recode(global_all_merged$brain_region,"Mean_thick"="Mean Cortical Thickness",
+                    # "Total_area"="Total WM Surface Area",
+                    "Total_pial_area"="Total Surface Area",
+                    "EstimatedTotalIntraCranialVol"="Estimated Intracranial Volume",
+                    "SubCortGrayVol"="Subcortical Gray Matter Volume",
+                    "CortexVol" = "Cortical Volume",
+                    "CerebralWhiteMatterVol" = "Cerebral White Matter Volume",
+                    "BrainSegVol" = "Total Brain Volume"))
+
+aim1df<-full_join(global.3Trun01,global.rawLF) %>% full_join(global.synthsr) %>% 
+  mutate(acq=case_when(acq=='run-01'~'3T',
+                       acq=='rawLF-axi-1to1' ~ "64mT",
+                       acq=='synthsr-axi-1to1' ~ "SynthSR\n64mT"),
+         acq=factor(acq,levels=c('64mT','SynthSR\n64mT','3T')))
+plots<-list()
+tags<-LETTERS[1:7]
+for (i in 2:length(vars)){
+  var=vars[[i]]
+  varlab=varlabs[[i]]
+  plot<-make_boxes(aim1df,"acq",var,ylab=varlab)
+  if(i!=3){
+    plot=plot+scale_y_continuous(labels = function(x) format(x, scientific = TRUE,digits=2))
+  }
+  plots[[i-1]]<-plot + labs(tag=tags[i-1])
+}
+
+pattern<-"AABBCCDD#\n#EEFFGG##"
+allAim1<-wrap_elements(plots[[1]])+wrap_elements(plots[[2]])+wrap_elements(plots[[3]])+wrap_elements(plots[[4]])+
+  wrap_elements(plots[[5]])+wrap_elements(plots[[6]])+wrap_elements(plots[[7]])+plot_layout(design=pattern)
+
+ggsave("Fig4_boxplots.pdf",allAim1,width=10,height=6)
+
+
+```

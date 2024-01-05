@@ -1,0 +1,702 @@
+---
+title: ""
+output: html_document
+date: ""
+---
+<style type="text/css">
+.main-container {
+  max-width: 1800px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,fig.width=10, fig.height=5)
+library(tidyverse)
+library(officer)
+library(flextable)
+library(magrittr)
+library(cocor)
+library(Metrics)
+library(multDM)
+library(ggplot2)
+library(patchwork)
+library(cowplot)
+library(svglite)
+library(ggpubr)
+library(ggseg)
+```
+```{r load_and_make_funcs,include=FALSE}
+load("../code/global_data.Rdata")
+load("../code/global_all_merged.Rdat")
+global_all_merged<-all_merged
+load("../code/regional_all_merged.Rdat")
+regional_all_merged<-all_merged
+
+load("../code/icc_regional_all_merged.Rdat")
+icc_regional_all_merged<-all_merged
+
+
+remove(all_merged)
+SA_dk_ref<-read_delim(file='../code/ref/SA_ggseg_ref_desikan.txt',delim="\t") ##ggseg reference
+CT_dk_ref<-read_delim(file='../code/ref/CT_ggseg_ref_desikan.txt',delim="\t") ##ggseg reference
+CV_dk_ref<-read_delim(file='../code/ref/vol_ggseg_ref_desikan.txt',delim="\t") ##ggseg reference
+sub_dk_ref<-read_delim(file='../code/ref/sub_ggseg_ref_aseg_new.txt',delim="\t") ##ggseg reference
+
+DigFormat<-function(d,cut,fixed,scientific){
+  d<-as.numeric(d)
+  if (is.na(d)){
+    chard=NA
+  }else if (abs(d) < cut){
+    chard=sprintf(scientific,d)
+  }else{
+    chard=sprintf(fixed,d)
+  }
+  return(chard)
+}
+
+DigFormat_V<-Vectorize(DigFormat)
+
+outlier.sd <- function(x) {
+  return(x < mean(x)-(3*sd(x)) | x > mean(x)+(3*sd(x)))
+}
+
+make_boxes<-function(df,x,y,ylab=y){
+  df %>%
+    group_by(get(x)) %>%
+    mutate(outlier = ifelse(outlier.sd(get(y)), SubjID, NA)) %>%
+    ggplot(aes(x=get(x),y=get(y))) +
+    geom_point()+
+    geom_line(aes(group=SubjID),linewidth=0.1,alpha=0.2)+
+    # geom_label_repel(aes(label=outlier,x=get(x)),na.rm=T)+
+    geom_boxplot(alpha=0.4, width=0.5,aes(fill=get(x)))+
+    theme_light()+
+    ylab(ylab)+
+    theme(axis.title.x=element_blank(),
+          panel.grid = element_blank(),
+          legend.position = 'none',
+          text=element_text(size=10))
+}
+
+ggsegplot<-function(dfin,colname,ref,title,slice=NULL,bgcol="black",min=-1,max=1,leg="r"){
+    atlassel=ref$atlas[1]
+   df<-merge(dfin,ref,by.x="brain_region",by.y="find")%>% 
+    select ("atlas","type","hemi","side","replacewith","label",colname)%>%
+    rename("region"="replacewith","dim"=colname)#%>%brain_join(get(atlassel))
+
+  plot.out<-ggseg(df, atlas=atlassel,
+               mapping=aes(fill=as.numeric(dim)),
+               color="black",size=0.5,view=slice,position="dispersed")+
+    scale_fill_gradient2(name=leg,high="#ff5550",low="blue", mid="white",na.value="grey70",limits = c(min,max))+
+    xlab("")+ylab("")+theme(axis.text.x=element_blank())+
+    theme_void()+theme(legend.position="bottom")+#, plot.background = element_rect(colour=bgcol,size=3))+
+    ggtitle(title)+theme(plot.title=element_text(color=bgcol,face="bold"),
+                         text=element_text(size=10,vjust=0.5),
+                         plot.margin=unit(c(-0.1,0,-0.1,0),units="cm"))
+  return(plot.out)
+  
+}  
+
+makegggrid<-function(text="testtitle",plota,plotb,plotc,plotd){
+  plot_grid(text_grob(text,face="bold",just="left",x=0,y=0.1,size=10),
+            plota,plotb,plotc,plotd+theme(legend.position = "none"),
+            NULL,
+            get_legend(plotd+theme(text=element_text(vjust=0.75,size=8),
+                                                       plot.margin=unit(c(0.3,0.1,0.3,0.1),"cm"))),
+            nrow=7,rel_heights=c(0.5,1,1,1,1,0.1,0.5),rel_widths=c(1,1,1,1,1,1),greedy=FALSE)
+}
+
+
+```
+
+```{r numbers, include=FALSE}
+
+#Dynamically assign numbers to plots and tables so we don't have to change them all by hand
+
+i=0
+i=i+1
+scanparamnum=i
+i=i+1
+Aim1tablenum=i
+i=i+1
+Aim1ICCtablenum=i
+i=i+1
+Aim2tablenum=i
+i=i+1
+Aim2ICCtablenum=i
+i=i+1
+Aim4tablenum=i
+i=i+1
+DiffMotionnum=i
+i=i+1
+DiffAgenum=i
+
+
+i=0
+i=i+1
+ParticipantFlownum=i
+i=i+1
+BArawnum=i
+i=i+1
+BAsynthnum=i
+i=i+1
+Aim2Boxesnum=i
+i=i+1
+Aim3Boxesnum=i
+i=i+1
+Aim4ggsegnum=i
+```
+
+### **Supplementary Content**
+
+#Make list of tables and figures
+
+[**Supplemental Tables**](#SuppTabs)    
+[**STable `r scanparamnum`.**  Scan Parameters for the 64 mT and 3T MRI scans obtained in this study](#scanparam)    
+[**STable `r Aim1tablenum`.**  Pearson correlations of regional measurements from standard versus SynthSR-processed axial 64mT scans with 3T scans](#Aim1table)    
+[**STable `r Aim1ICCtablenum`.**  Intra-class correlations of regional measurements from standard versus SynthSR-processed axial 64mT scans with 3T scans](#Aim1ICCtable)    
+[**STable `r Aim2tablenum`.**  Pearson correlations of regional measurements from standard axial versus standard multi-orientation 64mT scans with 3T scans](#Aim2table)    
+[**STable `r Aim2ICCtablenum`.**  Intra-class correlations of regional measurements from standard versus SynthSR-processed axial 64mT scans with 3T scans](#Aim2ICCtable)    
+[**STable `r Aim4tablenum`.**  Correlations of global measurements from SynthSR-processed axial 64mT scans versus SynthSR-processed repeated 64mT scans with 3T scans](#Aim4table)    
+[**STable `r DiffMotionnum`.**  Correlations of individual-level differences between low- and high-field scans with motion during low-field scans (framewise displacement).](#DiffMotion)    
+[**STable `r DiffAgenum`.** Correlations of individual-level differences between low- and high-field scans with participant age.](#DiffAge)    
+   
+[**Supplemental Figures**](#SuppFigs)    
+[**SFigure `r ParticipantFlownum`.**   Flow chart of participant inclusion and exclusion](#ParticipantFlow)    
+[**SFigure `r BArawnum`.**  Bland-Altman plots of individual-level global measurements from standard 64mT axial and 3T scans](#BAraw)    
+[**SFigure `r BAsynthnum`.**  Bland-Altman plots of individual-level global measurements from SynthSR-processed 64mT axial and 3T scans](#BAsynth)    
+[**SFigure `r Aim2Boxesnum`.**   Comparison of individual-level global measurements across standard 64mT axial scans, standard 64mT repeated multi-orientation scans, and traditional 3T scans](#Aim2Boxes)   
+[**SFigure `r Aim3Boxesnum`.**   Comparison of individual-level global measurements across standard 64mT axial scans, SynthSR-processed 64mT repeated multi-orientation scans, and traditional 3T scans](#Aim3Boxes)    
+[**SFigure `r Aim4ggsegnum`.**   Comparison of super-resolution approaches in improving correspondence between low-field and high-field-acquired MR images](#Aim4ggseg)   
+
+
+
+
+
+```{r make_scanparams, include=FALSE}
+sublist<-read_csv("G:/Shared drives/NeRD_lab/research_projects/LF_3T/data/sublist.txt",col_names=FALSE)
+
+
+T1data<-read_delim("../data/20231020_polyneuro_T1w_json_info.tsv",col_select=(-13)) %>%
+  filter(str_extract(fileID,"sub-P[0-9]+_ses-01") %in% sublist$X1) %>%
+  mutate(scantype=str_extract(fileID,"LF[a-z]+"),
+         scantype=ifelse(is.na(scantype),"T1",scantype),
+         ManufacturersModelName=str_remove(ManufacturersModelName,"MAGNETOM_"),
+         ManufacturersModelName=str_remove(ManufacturersModelName,"MAGNETOM ")) %>%
+  select(-fileID,-InstitutionName,-AcquisitionTime,-Manufacturer) %>% #,-InversionTime) %>%
+  mutate(Manufacturer=case_when(ManufacturersModelName=="Prisma" ~ "Siemens",
+                                ManufacturersModelName=="swoop" ~ "Hyperfine"),
+         ManufacturersModelName=str_replace(ManufacturersModelName,"swoop","Swoop")) %>%
+   group_by(scantype,EchoTime...7,RepetitionTime) %>% 
+  mutate(N=n()) %>% unique() %>% ungroup() %>% group_by(scantype) %>% slice_max(order_by=N) %>%
+  mutate(scantype=case_when(scantype=="LFaxi" ~ "T1 64mT Axial",
+                            scantype=="LFcor" ~ "T1 64mT Coronal",
+                            scantype=="LFsag" ~ "T1 64mT Sagittal",
+                            scantype=="T1" ~ "T1 3T"),
+         InversionTime=as.character(InversionTime),
+         sliceres=case_when(str_detect(scantype,"64mT") ~ "1.6 x 1.6",
+                           str_detect(scantype,"3T") ~ "0.8 x 0.8"),
+         acqtime=case_when(str_detect(scantype,"64mT [AS]") ~ "339",
+                           str_detect(scantype,"64mT C") ~ "332",
+                           str_detect(scantype,"3T") ~ "394")) %>%
+  select(scantype, Manufacturer, everything(),-MagneticFieldStrength) %>% unique()
+
+T2data<-read_delim("../data/20231020_polyneuro_T2w_json_info.tsv",col_select=(-13)) %>%
+  filter(str_extract(fileID,"sub-P[0-9]+_ses-01") %in% sublist$X1) %>%
+  mutate(scantype=str_extract(fileID,"LF[a-z]+"),
+         scantype=ifelse(is.na(scantype),"T2",scantype),
+         ManufacturersModelName=str_remove(ManufacturersModelName,"MAGNETOM_")) %>%
+  select(-fileID,-InstitutionName,-AcquisitionTime,-Manufacturer) %>% #,-InversionTime) %>%
+  mutate(Manufacturer=case_when(ManufacturersModelName=="Prisma" ~ "Siemens",
+                                ManufacturersModelName=="swoop" ~ "Hyperfine"),
+         ManufacturersModelName=str_replace(ManufacturersModelName,"swoop","Swoop")) %>%
+  select(scantype, Manufacturer, everything()) %>% group_by(scantype,MagneticFieldStrength,EchoTime...7,RepetitionTime) %>% 
+  mutate(N=n()) %>% unique() %>% ungroup() %>% group_by(scantype) %>% slice_max(order_by=N)%>%
+  mutate(scantype=case_when(scantype=="LFaxi" ~ "T2 64mT Axial",
+                            scantype=="LFcor" ~ "T2 64mT Coronal",
+                            scantype=="LFsag" ~ "T2 64mT Sagittal",
+                            scantype=="T2" ~ "T2 3T"),
+         InversionTime=as.character(InversionTime),
+         sliceres=case_when(str_detect(scantype,"64mT") ~ "1.6 x 1.6",
+                           str_detect(scantype,"3T") ~ "0.8 x 0.8"),
+         acqtime=case_when(str_detect(scantype,"64mT A") ~ "173",
+                           str_detect(scantype,"64mT S") ~ "119",
+                           str_detect(scantype,"64mT C") ~ "141",
+                           str_detect(scantype,"3T") ~ "357")) %>%
+  replace_na(list(InversionTime="•"))
+
+bord1=fp_border(color="black",width=2)
+
+scandata<-full_join(T1data,T2data) %>% 
+  select(scantype,Manufacturer,ManufacturersModelName,
+         RepetitionTime,EchoTime...7,InversionTime,
+         FlipAngle,PercentPhaseFOV,SliceThickness,sliceres,acqtime) %>%
+  flextable() %>% 
+  set_header_labels(values=c("Scan Type","Scanner Manufacturer",
+                             "Scanner Model","Repetition Time (s)",
+                             "Echo Time (s)","Inversion Time (s)", "Flip Angle (deg)",
+                             "Percent Phase FOV", "Slice Thickness (mm)","Slice Resolution (mm)","Total Acquisition Time (s)")) %>% 
+  width(j=1,width=1.75,unit="in") %>% theme_booktabs() %>%
+  hline(i=4,part="body",border=bord1) %>% vline(j=1,part="all",border=bord1) %>% 
+  bold(part="header") %>% 
+  border_outer(part="all",border=bord1) %>% align(align="center",part="all")
+
+```
+<div style="page-break-after: always"></div>
+
+
+<a name="SuppTabs"></a>***Supplemental Tables***  
+<a name="scanparam"></a> **STable `r scanparamnum`.** Scan Parameters for the 64 mT and 3T MRI scans obtained in this study.   
+`r scandata`
+*Note: Four participants received slightly modified T1-weighted 64mT scans (repetition time = 0.88 s, inversion time = 0.354 s). Excluding these participants from the analyses did not significantly change the results.* 
+
+```{r make_Aim1,include=FALSE}
+all_ref<-full_join(select(SA_dk_ref,find,hemi,replacewith),select(CT_dk_ref,find,hemi,replacewith)) %>%
+  full_join(select(CV_dk_ref,find,hemi,replacewith)) %>%
+  full_join(select(sub_dk_ref,find,hemi,replacewith)) %>%
+  mutate(hemi=ifelse(is.na(hemi),"left",hemi),
+        replacewith=paste(hemi,replacewith,sep=" "),
+         measure=case_when(str_detect(find,"_areapial") ~ "area",
+                           str_detect(find,"_thickness") ~ "thickness",
+                           str_detect(find,"_volume") ~ "volume",
+                           TRUE ~ "subcortical volume")) %>% 
+  select(-hemi) %>% rename("brain_region"=find) 
+  
+
+flexAim1<-left_join(regional_all_merged, all_ref) %>% unique() %>%
+  mutate(brain_region=ifelse(!is.na(replacewith),replacewith,tolower(str_replace_all(brain_region,"[-_]"," "))),
+         brain_region=str_remove(brain_region,"midline "),
+         measure=ifelse(is.na(measure),"subcortical volume",measure),
+         brain_region=paste(brain_region,measure,sep=" "),
+         brain_region=str_replace(brain_region,"cc ","corpus callosum "),
+         brain_region=str_replace(brain_region,"DC ","diencephalon "),
+         brain_region=str_replace(brain_region,"bankssts","banks of superior temporal sulcus")) %>%
+  mutate(across(ends_with("_r"),DigFormat_V,cut=0.01,fixed="%.2f",scientific="%.1e"),
+         across(ends_with("_Z"),DigFormat_V,cut=0.01,fixed="%.2f",scientific="%.1e"),
+         across(ends_with("val"),DigFormat_V,cut=0.001,fixed="%.3f",scientific="%.2e")) %>%
+  select(brain_region,
+         raw3T_r,raw3T_pval,raw3T_qval,#rawaxi13T_mape,
+         synth3T_r,synth3T_pval,synth3T_qval,#synthaxi13T_mape,
+         aim1steigers_Z,aim1steigers_pval,aim1steigers_qval) %>%
+  flextable()  %>% theme_booktabs() %>% fontsize(size=9,part="all") %>%
+  autofit() %>%
+  vline(j=c(1,4,7),border=fp_border(color = "black",width=2)) %>% 
+  hline(i=seq(from=68,to=242,by=68),border=fp_border(color = "black",width=2)) %>%
+  border_outer(border=fp_border(color="black",width=2),part="all") %>%
+  bold(i= ~ as.numeric(`raw3T_qval`)<0.05, j=2:4,part="body") %>%
+  bold(i= ~ as.numeric(`synth3T_qval`)<0.05, j=5:7,part="body") %>%
+  bold(i= ~ as.numeric(`aim1steigers_qval`)<0.05, j=8:10,part="body") %>%
+  bold(part="header") %>%
+  add_header_row(top=TRUE,values=c("Measurement",
+                                   "Standard Axial 64mT Correlations with 3T",
+                                   "SynthSR−Processed Axial 64mT Correlations with 3T",
+                                   "Steiger"),
+                 colwidths = c(1,3,3,3)) %>% 
+  set_header_labels(values=c("Measurement",
+                             "r","p","q",#"MAPE",
+                             "r","p","q",#"MAPE",
+                             "z","p","q")) %>%
+  italic(i=2,part="header") %>% merge_v(part="header") %>%# merge_v(j=1,part="body") %>% 
+ # hline(i=1:4,j=1,border=fp_border(color = "black",width=2)) %>%
+  align(align="center",part="all") %>% #italic(i=2,j=c(5,9),italic=FALSE,part="header") %>%
+  fix_border_issues()
+
+
+flexAim1ICC<-left_join(icc_regional_all_merged, all_ref) %>% unique() %>%
+  mutate(brain_region=ifelse(!is.na(replacewith),replacewith,tolower(str_replace_all(brain_region,"[-_]"," "))),
+         brain_region=str_remove(brain_region,"midline "),
+         measure=ifelse(is.na(measure),"subcortical volume",measure),
+         brain_region=paste(brain_region,measure,sep=" "),
+         brain_region=str_replace(brain_region,"cc ","corpus callosum "),
+         brain_region=str_replace(brain_region,"DC ","diencephalon "),
+         brain_region=str_replace(brain_region,"bankssts","banks of superior temporal sulcus")) %>%
+  mutate(across(ends_with("_r"),DigFormat_V,cut=0.01,fixed="%.2f",scientific="%.1e"),
+         across(ends_with("_Z"),DigFormat_V,cut=0.01,fixed="%.2f",scientific="%.1e"),
+         across(ends_with("val"),DigFormat_V,cut=0.001,fixed="%.3f",scientific="%.2e")) %>%
+  select(brain_region,
+         raw3T_r,raw3T_pval,raw3T_qval,#rawaxi13T_mape,
+         synth3T_r,synth3T_pval,synth3T_qval,#synthaxi13T_mape,
+         aim1steigers_Z,aim1steigers_pval,aim1steigers_qval) %>%
+  flextable()  %>% theme_booktabs() %>% fontsize(size=9,part="all") %>%
+  autofit() %>%
+  vline(j=c(1,4,7),border=fp_border(color = "black",width=2)) %>% 
+  hline(i=seq(from=68,to=242,by=68),border=fp_border(color = "black",width=2)) %>%
+  border_outer(border=fp_border(color="black",width=2),part="all") %>%
+  bold(i= ~ as.numeric(`raw3T_qval`)<0.05, j=2:4,part="body") %>%
+  bold(i= ~ as.numeric(`synth3T_qval`)<0.05, j=5:7,part="body") %>%
+  bold(i= ~ as.numeric(`aim1steigers_qval`)<0.05, j=8:10,part="body") %>%
+  bold(part="header") %>%
+  add_header_row(top=TRUE,values=c("Measurement",
+                                   "Standard Axial 64mT ICC with 3T",
+                                   "SynthSR−Processed Axial 64mT ICC with 3T",
+                                   "Steiger"),
+                 colwidths = c(1,3,3,3)) %>% 
+  set_header_labels(values=c("Measurement",
+                             "ICC","p","q",#"MAPE",
+                             "ICC","p","q",#"MAPE",
+                             "z","p","q")) %>%
+  italic(i=2,part="header") %>% merge_v(part="header") %>%# merge_v(j=1,part="body") %>% 
+ # hline(i=1:4,j=1,border=fp_border(color = "black",width=2)) %>%
+  align(align="center",part="all") %>% #italic(i=2,j=c(5,9),italic=FALSE,part="header") %>%
+  fix_border_issues()
+
+
+
+```
+<div style="page-break-after: always"></div>    
+<a name="Aim1table"></a> **STable `r Aim1tablenum`.** Pearson correlations of regional measurements from standard versus SynthSR-processed axial 64mT scans with 3T scans. Differences between correlation strengths were tested using Steiger's Z. A positive Z-value indicates that SynthSR-processed regions were more strongly correlated to 3T scans than standard regions.  Analyses that are statistically significant after correction for multiple comparisons are in bold.   
+
+`r flexAim1`
+
+<div style="page-break-after: always"></div>    
+<a name="Aim1ICCtable"></a> **STable `r Aim1ICCtablenum`.** Intra-class correlations (ICCs) of regional measurements from standard versus SynthSR-processed axial 64mT scans with 3T scans. Differences between ICC strengths were tested using Steiger's Z. A positive Z-value indicates that SynthSR-processed regions were more strongly correlated to 3T scans than standard regions.  Analyses that are statistically significant after correction for multiple comparisons are in bold.   
+
+`r flexAim1ICC`
+
+```{r make_Aim2,include=FALSE}
+
+  
+
+flexAim2<-left_join(regional_all_merged, all_ref) %>% unique() %>%
+  mutate(brain_region=ifelse(!is.na(replacewith),replacewith,tolower(str_replace_all(brain_region,"[-_]"," "))),
+         brain_region=str_remove(brain_region,"midline "),
+         measure=ifelse(is.na(measure),"subcortical volume",measure),
+         brain_region=paste(brain_region,measure,sep=" "),
+         brain_region=str_replace(brain_region,"cc ","corpus callosum "),
+         brain_region=str_replace(brain_region,"DC ","diencephalon "),
+         brain_region=str_replace(brain_region,"bankssts","banks of superior temporal sulcus")) %>%
+  mutate(across(ends_with("_r"),DigFormat_V,cut=0.01,fixed="%.2f",scientific="%.1e"),
+         across(ends_with("_Z"),DigFormat_V,cut=0.01,fixed="%.2f",scientific="%.1e"),
+         across(ends_with("val"),DigFormat_V,cut=0.001,fixed="%.3f",scientific="%.2e")) %>%
+  select(brain_region,
+         raw3T_r,raw3T_pval,raw3T_qval,#rawaxi13T_mape,
+         rawall3T_r,rawall3T_pval,rawall3T_qval,#synthaxi13T_mape,
+         aim2steigers_Z,aim2steigers_pval,aim2steigers_qval) %>%
+  flextable()  %>% theme_booktabs() %>% fontsize(size=9,part="all") %>%
+  autofit() %>%
+  vline(j=c(1,4,7),border=fp_border(color = "black",width=2)) %>% 
+  hline(i=seq(from=68,to=242,by=68),border=fp_border(color = "black",width=2)) %>%
+  border_outer(border=fp_border(color="black",width=2),part="all") %>%
+  bold(i= ~ as.numeric(`raw3T_qval`)<0.05, j=2:4,part="body") %>%
+  bold(i= ~ as.numeric(`rawall3T_qval`)<0.05, j=5:7,part="body") %>%
+  bold(i= ~ as.numeric(`aim2steigers_qval`)<0.05, j=8:10,part="body") %>%
+  bold(part="header") %>%
+  add_header_row(top=TRUE,values=c("Measurement",
+                                   "Standard Axial 64mT Correlations with 3T",
+                                   "Standard Multi-Orientation 64mT Correlations with 3T",
+                                   "Steiger"),
+                 colwidths = c(1,3,3,3)) %>% 
+  set_header_labels(values=c("Measurement",
+                             "r","p","q",#"MAPE",
+                             "r","p","q",#"MAPE",
+                             "z","p","q")) %>%
+  italic(i=2,part="header") %>% merge_v(part="header") %>%# merge_v(j=1,part="body") %>% 
+ # hline(i=1:4,j=1,border=fp_border(color = "black",width=2)) %>%
+  align(align="center",part="all") %>% #italic(i=2,j=c(5,9),italic=FALSE,part="header") %>%
+  fix_border_issues()
+
+flexAim2ICC<-left_join(icc_regional_all_merged, all_ref) %>% unique() %>%
+  mutate(brain_region=ifelse(!is.na(replacewith),replacewith,tolower(str_replace_all(brain_region,"[-_]"," "))),
+         brain_region=str_remove(brain_region,"midline "),
+         measure=ifelse(is.na(measure),"subcortical volume",measure),
+         brain_region=paste(brain_region,measure,sep=" "),
+         brain_region=str_replace(brain_region,"cc ","corpus callosum "),
+         brain_region=str_replace(brain_region,"DC ","diencephalon "),
+         brain_region=str_replace(brain_region,"bankssts","banks of superior temporal sulcus")) %>%
+  mutate(across(ends_with("_r"),DigFormat_V,cut=0.01,fixed="%.2f",scientific="%.1e"),
+         across(ends_with("_Z"),DigFormat_V,cut=0.01,fixed="%.2f",scientific="%.1e"),
+         across(ends_with("val"),DigFormat_V,cut=0.001,fixed="%.3f",scientific="%.2e")) %>%
+  select(brain_region,
+         raw3T_r,raw3T_pval,raw3T_qval,#rawaxi13T_mape,
+         rawall3T_r,rawall3T_pval,rawall3T_qval,#synthaxi13T_mape,
+         aim2steigers_Z,aim2steigers_pval,aim2steigers_qval) %>%
+  flextable()  %>% theme_booktabs() %>% fontsize(size=9,part="all") %>%
+  autofit() %>%
+  vline(j=c(1,4,7),border=fp_border(color = "black",width=2)) %>% 
+  hline(i=seq(from=68,to=242,by=68),border=fp_border(color = "black",width=2)) %>%
+  border_outer(border=fp_border(color="black",width=2),part="all") %>%
+  bold(i= ~ as.numeric(`raw3T_qval`)<0.05, j=2:4,part="body") %>%
+  bold(i= ~ as.numeric(`rawall3T_qval`)<0.05, j=5:7,part="body") %>%
+  bold(i= ~ as.numeric(`aim2steigers_qval`)<0.05, j=8:10,part="body") %>%
+  bold(part="header") %>%
+  add_header_row(top=TRUE,values=c("Measurement",
+                                   "Standard Axial 64mT ICC with 3T",
+                                   "Standard Multi-Orientation 64mT ICC with 3T",
+                                   "Steiger"),
+                 colwidths = c(1,3,3,3)) %>% 
+  set_header_labels(values=c("Measurement",
+                             "ICC","p","q",#"MAPE",
+                             "ICC","p","q",#"MAPE",
+                             "z","p","q")) %>%
+  italic(i=2,part="header") %>% merge_v(part="header") %>%# merge_v(j=1,part="body") %>% 
+ # hline(i=1:4,j=1,border=fp_border(color = "black",width=2)) %>%
+  align(align="center",part="all") %>% #italic(i=2,j=c(5,9),italic=FALSE,part="header") %>%
+  fix_border_issues()
+
+```
+<div style="page-break-after: always"></div>    
+<a name="Aim2table"></a> **STable `r Aim2tablenum`.** Pearson correlations of regional measurements from standard axial versus standard multi-orientation 64mT scans with 3T scans. Differences between correlation strengths were tested using Steiger's Z. A positive Z-value indicates that multi-orientation regions were more strongly correlated to 3T scans than axial-only regions.  Analyses that are statistically significant after correction for multiple comparisons are in bold.   
+
+`r flexAim2`
+
+<div style="page-break-after: always"></div>    
+<a name="Aim2ICCtable"></a> **STable `r Aim2ICCtablenum`.** Intra-class correlations (ICCs) of regional measurements from standard axial versus standard multi-orientation 64mT scans with 3T scans. Differences between ICC strengths were tested using Steiger's Z. A positive Z-value indicates that multi-orientation regions were more strongly correlated to 3T scans than axial-only regions.  Analyses that are statistically significant after correction for multiple comparisons are in bold.   
+
+`r flexAim2ICC`
+
+```{r make_Aim4,include=FALSE}
+flexAim4<-global_all_merged %>%
+  select(brain_region,synth3T_r,synth3T_pval,synth3T_qval,
+                                synthall3T_r,synthall3T_pval,synthall3T_qval,
+                                aim4steigers_Z,aim4steigers_pval,aim4steigers_qval) %>%
+  flextable()%>%theme_booktabs() %>%
+  vline(j=c(1,4,7),border=fp_border(color = "black",width=2),part="all") %>%
+  border_outer(border=fp_border(color="black",width=2),part="all") %>%
+  bold(i= ~ as.numeric(`synth3T_qval`)<0.05, j=2:4,part="body") %>%
+  bold(i= ~ as.numeric(`synthall3T_qval`)<0.05, j=5:7,part="body") %>%
+  bold(i= ~ as.numeric(`aim4steigers_qval`)<0.05, j=8:10,part="body") %>%
+  bold(part="header") %>%
+  add_header_row(top=TRUE,values=c("Measurement",
+                                   "SynthSR−Processed Axial 64mT Correlations with 3T",
+                                   "SynthSR−Processed Multi-Orientation 64mT Correlations with 3T",
+                                   "Steiger"),
+                 colwidths = c(1,3,3,3)) %>% 
+  set_header_labels(values=c("Measurement",
+                             "ICC","p","q",#"MAPE",
+                             "ICC","p","q",#"MAPE",
+                             "z","p","q")) %>%
+  italic(i=2,part="header") %>% merge_v(part="header") %>% merge_v(j=1,part="body") %>% 
+  align(align="center",part="all") %>% #italic(i=2,j=c(5,9),italic=FALSE,part="header") %>%
+  fix_border_issues() 
+
+
+```
+<div style="page-break-after: always"></div>   
+<a name="Aim4table"></a> **STable `r Aim4tablenum`.** Correlations of global measurements from SynthSR-processed axial 64mT scans versus SynthSR-processed multi-orientation 64mT scans with 3T scans. Differences between correlation strengths were tested using Steiger's Z. A positive Z-value indicates that the multi-orientation scans were more strongly correlated to 3T scans than the axial-only scans. Analyses that are statistically significant after correction for multiple comparisons are in bold.   
+
+`r flexAim4`
+
+```{r make_figs, include=F}
+
+varlabs=c(NA,recode(global_all_merged$brain_region,"Mean_thick"="Mean Cortical Thickness",
+                    # "Total_area"="Total WM Surface Area",
+                    "Total_pial_area"="Total Surface Area",
+                    "EstimatedTotalIntraCranialVol"="Estimated Intracranial Volume",
+                    "SubCortGrayVol"="Subcortical Gray Matter Volume",
+                    "CortexVol" = "Cortical Volume",
+                    "CerebralWhiteMatterVol" = "Cerebral White Matter Volume",
+                    "BrainSegVol" = "Total Brain Volume"))
+
+aim1df<-full_join(global.3Trun01,global.rawLF) %>% full_join(global.synthsr) %>% 
+  mutate(acq=case_when(acq=='run-01'~'3T',
+                       acq=='rawLF-axi-1to1' ~ "64mT",
+                       acq=='synthsr-axi-1to1' ~ "SynthSR\n64mT"),
+         acq=factor(acq,levels=c('64mT','SynthSR\n64mT','3T')))
+plots<-list()
+for (i in 2:length(vars)){
+  var=vars[[i]]
+  varlab=varlabs[[i]]
+  plot<-make_boxes(aim1df,"acq",var,ylab=varlab)
+  if(i!=3){
+    plot=plot+scale_y_continuous(labels = function(x) format(x, scientific = TRUE,digits=2))
+  }
+  plots[[i-1]]<-plot
+}
+
+pattern<-"AABBCCDD#\n#EEFFGG##"
+allAim1<-wrap_elements(plots[[1]])+wrap_elements(plots[[2]])+wrap_elements(plots[[3]])+wrap_elements(plots[[4]])+
+  wrap_elements(plots[[5]])+wrap_elements(plots[[6]])+wrap_elements(plots[[7]])+plot_layout(design=pattern)
+
+
+aim2df<-full_join(global.3Trun01,global.rawLF) %>% full_join(global.rawLF.all) %>% 
+ mutate(acq=case_when(acq=='run-01'~'3T',
+                       acq=='rawLF-axi-1to1' ~ "64mT",
+                       acq=='rawLF' ~ "Multi-Orient.\n64mT"),
+         acq=factor(acq,levels=c('64mT','Multi-Orient.\n64mT','3T')))
+plots<-list()
+for (i in 2:length(vars)){
+  var=vars[[i]]
+  varlab=varlabs[[i]]
+  plot<-make_boxes(aim2df,"acq",var,ylab=varlab)
+  if(i!=3){
+    plot=plot+scale_y_continuous(labels = function(x) format(x, scientific = TRUE,digits=2))
+  }
+  plots[[i-1]]<-plot
+}
+allAim2<-wrap_elements(plots[[1]])+wrap_elements(plots[[2]])+wrap_elements(plots[[3]])+wrap_elements(plots[[4]])+
+  wrap_elements(plots[[5]])+wrap_elements(plots[[6]])+wrap_elements(plots[[7]])+plot_layout(design=pattern)
+
+aim3df<-full_join(global.3Trun01,global.rawLF) %>% full_join(global.synthsr.all) %>% 
+   mutate(acq=case_when(acq=='run-01'~'3T',
+                       acq=='rawLF-axi-1to1' ~ "64mT",
+                       acq=='synthsr' ~ "Multi-Orient. +\nSynthSR\n64mT"),
+         acq=factor(acq,levels=c('64mT','Multi-Orient. +\nSynthSR\n64mT','3T')))
+plots<-list()
+for (i in 2:length(vars)){
+  var=vars[[i]]
+  varlab=varlabs[[i]]
+  plot<-make_boxes(aim3df,"acq",var,ylab=varlab)
+  if(i!=3){
+    plot=plot+scale_y_continuous(labels = function(x) format(x, scientific = TRUE,digits=2))
+  }
+  plots[[i-1]]<-plot
+}
+allAim3<-wrap_elements(plots[[1]])+wrap_elements(plots[[2]])+wrap_elements(plots[[3]])+wrap_elements(plots[[4]])+
+  wrap_elements(plots[[5]])+wrap_elements(plots[[6]])+wrap_elements(plots[[7]])+plot_layout(design=pattern)
+
+```
+
+<div style="page-break-after: always"></div>
+
+```{r read_tables, include=FALSE}
+load("../code/Diffscore_cor_tests.Rdata")
+```
+<a name="DiffMotion"></a> **STable `r DiffMotionnum`.**  Correlations of individual-level differences between low- and high-field scans with motion during low-field scans (framewise displacement). Steiger's Z-tests assessed whether correlations were significantly different between low-field acquisition approaches. Analyses that are statistically significant after correction for multiple comparisons are in bold.       
+`r table1`
+<div style="page-break-after: always"></div>
+
+<a name="DiffAge"></a> **Stable `r DiffAgenum`.**  Correlations of individual-level differences between low- and high-field scans with participant age. Steiger's Z-tests assessed whether correlations were significantly different between low-field acquisition approaches.          
+`r table2`
+<div style="page-break-after: always"></div>
+
+<a name="SuppFigs"></a>***Supplemental Figures***  
+<a name="ParticipantFlow"></a> **SFigure `r ParticipantFlownum`.**  Flow chart of participant inclusion and exclusion    
+
+```{r show_sfig1,out.width="70%"}
+knitr::include_graphics("figure_s1.png")
+```
+<div style="page-break-after: always"></div>
+
+```{r makeBAplots, include=FALSE,echo=FALSE}
+load("../code/bland_altman_raw.rdata")
+load("../code/bland_altman_synthsr.rdata")
+update_geom_defaults("text", list(size = 1.5))
+
+titles<-c("A. Total Surface Area\n     (mm²)","B. Total Brain Volume\n     (mm³)",
+          "C. Cortical Volume\n     (mm³)","D. Estimated Total Intracranial\n     Volume (mm³)",
+          "E. Subcortical Gray Matter\n     Volume (mm³)","F. Average Cortical Thickness\n     (mm)",
+          "G. Cerebral White Matter\n     Volume (mm³)")
+
+rawfigs=ls(pattern="raw_.*")
+raws<-list()
+for (i in 1:length(rawfigs)){
+  raws[[i]]<-get(rawfigs[i]) +theme_classic() + 
+    labs(title=titles[i]) + theme(plot.title = element_text(size=10),
+                                  axis.text=element_text(size=8)) 
+}
+
+rawpatch<-wrap_plots(raws) + plot_layout(design="AABBCC\nDDEEFF\n##GG##")
+
+
+synthfigs=ls(pattern="synth_.*")
+synths<-list()
+for (i in 1:length(synthfigs)){
+  synths[[i]]<-get(synthfigs[i]) +theme_classic() + 
+    labs(title=titles[i]) + theme(plot.title = element_text(size=10))
+
+}
+
+synthpatch<-wrap_plots(synths) + plot_layout(design="AABBCC\nDDEEFF\n##GG##")
+
+```
+
+<a name="BAraw"></a> **SFigure `r BArawnum`.**  Bland-Altman plots of agreement between 3T and standard 64mT scans. Bland-Altman plots illustrate the agreement between 3T and standard 64mT scans. Bias indicated by blue dotted line, and 95% limits of agreement by the upper and lower red dotted lines. 95% confidence intervals indicated in shaded regions. Correlation between pairwise differences and means shown by line of best fit.      
+
+```{r show_rawblandalt,out.width="100%",fig.height=7,message=FALSE,warning=FALSE,echo=FALSE}
+rawpatch
+```
+<div style="page-break-after: always"></div>
+<a name="BAsynth"></a> **SFigure `r BAsynthnum`.**  Bland-Altman plots illustrate the agreement between 3T and SynthSR-processed 64mT scans. Bias indicated by blue dotted line, and 95% limits of agreement by the upper and lower red dotted lines. 95% confidence intervals indicated in shaded regions. Correlation between pairwise differences and means shown by line of best fit.     
+```{r show_synthblandalt,out.width="100%",fig.height=7,message=FALSE,warning=FALSE,echo=FALSE}
+synthpatch
+```
+<div style="page-break-after: always"></div>
+
+
+<!-- <a name="Aim1Boxes"></a> **SFigure 4.** Comparison of individual-level global measurements across standard 64mT axial scans, SynthSR-processed 64mT axial scans, and traditional 3T scans     -->
+
+<!-- ```{r showAim1Boxes, include=T,out.width="100%",fig.width=10, fig.height=5} -->
+<!-- allAim1 -->
+<!-- ``` -->
+<!-- <div style="page-break-after: always"></div> -->
+
+<a name="Aim2Boxes"></a> **SFigure `r Aim2Boxesnum`.**  Comparison of individual-level global measurements across standard 64mT axial scans, standard 64mT multi-orientation scans, and traditional 3T scans    
+
+```{r showAim2Boxes, include=T,out.width="100%",fig.width=10, fig.height=5}
+allAim2
+```
+<div style="page-break-after: always"></div>
+
+<a name="Aim3Boxes"></a> **SFigure `r Aim3Boxesnum`.** Comparison of individual-level global measurements across standard 64mT axial scans, SynthSR-processed 64mT multi-orientation scans, and traditional 3T scans    
+
+```{r showAim3Boxes, include=T,out.width="100%",fig.width=10, fig.height=5}
+allAim3
+```
+
+```{r make_ggseg_aim4, include=FALSE}
+
+refs<-list(SA_dk_ref,CT_dk_ref,CV_dk_ref,sub_dk_ref)
+plotnames<-c("SAPLOT","CTPLOT","CVPLOT","SUBPLOT")
+targetvar<-"raw3T_r"
+prefix<-"rawaxi"
+leg=c(0,0,0,1)
+
+assign.plots<-function(refs=list(SA_dk_ref,CT_dk_ref,CV_dk_ref,sub_dk_ref),
+                       plotnames=c("SAPLOT","CTPLOT","CVPLOT","SUBPLOT"),
+                       targetvar,prefix,leg=c(0,0,0,1),
+                       is.steigers=0){
+  plots=list()
+  for(i in 1:length(refs)){
+    ref=refs[[i]]
+    if(is.steigers==0){
+      p<-ggsegplot(dfin=filter(regional_all_merged,brain_region %in% ref$find),
+                    colname=targetvar,ref=ref,title="")}
+    else{
+      p<-ggsegplot(dfin=filter(regional_all_merged,brain_region %in% ref$find),
+                    colname=targetvar,ref=ref,title="",
+                   min=min(regional_all_merged[[targetvar]]),
+                           max=max(regional_all_merged[[targetvar]]),leg="Z")
+    }
+    
+    if(leg[[i]]==0){
+      p=p+theme(legend.position="none")
+    }
+    assign(paste0(prefix,plotnames[[i]]),p,envir = .GlobalEnv)
+  }
+  
+}
+
+
+rowlab1<-text_grob("Cortical\nSurface\nArea",face="bold",just="centre",x=0.5,size=9,lineheight=1,vjust="top",y=0.4)
+rowlab2<-text_grob("Cortical\nThickness",face="bold",just="centre",x=0.5,size=9,lineheight=1,vjust="top",y=0.4)
+rowlab3<-text_grob("Cortical\nVolume",face="bold",just="centre",x=0.5,size=9,lineheight=1,vjust="top",y=0.4)
+rowlab4<-text_grob("Subcortical\nVolume",face="bold",just="centre",x=0.5,size=9,lineheight=1,vjust="top",y=0.4)
+rowlabs<-plot_grid(NULL,rowlab1,rowlab2,rowlab3,rowlab4,NULL,nrow=6,rel_heights = c(0.5,1,1,1,1,0.6))
+
+
+
+assign.plots(targetvar="aim4steigers_Z",prefix="steigers4",is.steigers=1)
+assign.plots(targetvar="synth3T_r",prefix="synthaxi")
+assign.plots(targetvar="synthall3T_r",prefix="synthall")
+
+
+synthaxiggsegs<-makegggrid(text="A. SynthSR-Processed Axial 64mT\n     Correlations with 3T",
+                           synthaxiSAPLOT,synthaxiCTPLOT,synthaxiCVPLOT,synthaxiSUBPLOT)
+synthallggsegs<-makegggrid(text="B. SynthSR-Processed Multi-Orientation 64mT\n    Correlations with 3T", 
+                         synthallSAPLOT,synthallCTPLOT,synthallCVPLOT,synthallSUBPLOT)
+steigers4ggsegs<-makegggrid(text="C. Steiger's Z Test of SynthSR + Multi-Orientation \n     Improvement on SynthSR Processing",
+                           steigers4SAPLOT,steigers4CTPLOT,steigers4CVPLOT,steigers4SUBPLOT)
+
+aim4ggseg<-plot_grid(rowlabs,synthaxiggsegs,synthallggsegs,rel_widths=c(0.5,2,2),nrow=1)
+aim4ggseg<-plot_grid(aim4ggseg,steigers4ggsegs,nrow=1,rel_widths=c(5,2))
+
+```
+<div style="page-break-after: always"></div>
+
+<a name="Aim4ggseg"></a> **SFigure `r Aim4ggsegnum`.** Comparison of super-resolution approaches in improving correspondence between low-field and high-field-acquired MR images. A. Correlation of standard, single-orientation low-field images with high-field images for surface area, cortical volume, cortical thickness and subcortical volume. B. Correlation of SynthSR-processed, multi-orientation low-field images with high-field images. C. Steiger z-test values for change in correspondence between single-orientation, SynthSR-processed images and multi-orientation, SynthSR-processed images.    
+
+```{r showAim4ggseg, include=T,out.width="100%",fig.width=12, fig.height=3.5}
+aim4ggseg
+```
+
